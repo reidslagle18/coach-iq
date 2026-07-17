@@ -788,6 +788,7 @@ function CoachMode({
   const [videoId, setVideoId] = useState<string | null>(null);
   const [scrub, setScrub] = useState(0);
   const [startTime, setStartTime] = useState(0);
+  const [startSet, setStartSet] = useState(false);
   const [pauseTime, setPauseTime] = useState(0);
   const [resumeEnd, setResumeEnd] = useState(0);
   const [placing, setPlacing] = useState(false);
@@ -815,6 +816,7 @@ function CoachMode({
     setVideoId(null);
     setScrub(0);
     setStartTime(0);
+    setStartSet(false);
     setPauseTime(0);
     setResumeEnd(0);
     setPlacing(false);
@@ -1040,10 +1042,13 @@ function CoachMode({
           <div className="chiprow">
             <button
               className="chip"
-              onClick={() => yt.seek(startTime)}
+              onClick={() => {
+                if (startSet) yt.seek(startTime);
+                else flash("Tap ⏮ Start first to mark where this play begins");
+              }}
               title="Jump to the Start you marked"
             >
-              ◀ Rep start
+              ◀ Rep start{startSet ? ` (${fmtTime(startTime)})` : ""}
             </button>
             <button
               className="chip"
@@ -1071,10 +1076,11 @@ function CoachMode({
               onClick={() => {
                 const t = yt.time();
                 setStartTime(t);
+                setStartSet(true);
                 flash(`Start @ ${fmtTime(t)}`);
               }}
             >
-              ⏮ Start = {fmtTime(startTime)}
+              ⏮ Start = {startSet ? fmtTime(startTime) : "—"}
             </button>
             <button
               className="chip"
