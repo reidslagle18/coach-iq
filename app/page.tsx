@@ -989,8 +989,26 @@ function CoachMode({
           <div className="yt-host" ref={yt.hostRef} />
           <div
             className={"overlay" + (placing ? " placing" : "")}
-            onClick={placeTarget}
+            onClick={(e) => {
+              if (placing) placeTarget(e);
+              else if (yt.isPlaying) yt.pause();
+              else yt.play();
+            }}
           >
+            {!placing && !yt.isPlaying && (
+              <span
+                className="tap-icon"
+                style={{
+                  position: "absolute",
+                  left: "50%",
+                  top: "50%",
+                  transform: "translate(-50%, -50%)",
+                  pointerEvents: "none",
+                }}
+              >
+                ▶
+              </span>
+            )}
             {targets.map((t) => (
               <button
                 key={t.id}
@@ -1072,9 +1090,9 @@ function CoachMode({
             </button>
           </div>
           <div className="help">
-            Press <b>▶ Play</b> to watch (or drag the slider). At the right spot,
-            tap <b>Start</b> (rep begins), <b>Decision</b> (player must choose),
-            and <b>Resolve</b> (just after it plays out).
+            <b>Tap the video</b> to play / pause (or drag the slider). At the
+            right spot, tap <b>Start</b> (rep begins), <b>Decision</b> (player
+            must choose), and <b>Resolve</b> (just after it plays out).
           </div>
         </div>
 
