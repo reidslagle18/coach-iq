@@ -126,6 +126,20 @@ function useYT() {
       playerRef.current?.pauseVideo?.();
     } catch {}
   }, []);
+  // Authoritative toggle — reads the player's real state, not React state
+  // (which can lag during buffering and make a tap do the wrong thing).
+  const toggle = useCallback(() => {
+    try {
+      const p = playerRef.current;
+      if (!p) return;
+      if (p.getPlayerState?.() === 1) {
+        p.pauseVideo();
+      } else {
+        p.mute?.();
+        p.playVideo();
+      }
+    } catch {}
+  }, []);
   const seek = useCallback((s: number, allowSeekAhead = true) => {
     try {
       playerRef.current?.seekTo?.(s, allowSeekAhead);
@@ -157,6 +171,7 @@ function useYT() {
     cue,
     play,
     pause,
+    toggle,
     seek,
     time,
     refreshDuration,
@@ -991,8 +1006,7 @@ function CoachMode({
             className={"overlay" + (placing ? " placing" : "")}
             onClick={(e) => {
               if (placing) placeTarget(e);
-              else if (yt.isPlaying) yt.pause();
-              else yt.play();
+              else yt.toggle();
             }}
           >
             {!placing && !yt.isPlaying && (
@@ -1039,7 +1053,7 @@ function CoachMode({
             <button
               className="chip"
               disabled={!yt.ready}
-              onClick={() => (yt.isPlaying ? yt.pause() : yt.play())}
+              onClick={() => yt.toggle()}
             >
               {yt.isPlaying ? "⏸ Pause" : "▶ Play"}
             </button>
