@@ -26,7 +26,7 @@ type Role = "athlete" | "coach";
    YouTube player hook — creates the player when its host node mounts
    (via callback ref), and queues a cue until the player is ready.
 ------------------------------------------------------------------ */
-function useYT() {
+function useYT(nativeControls = false) {
   const playerRef = useRef<any>(null);
   const pending = useRef<{ videoId: string; start: number } | null>(null);
   const [ready, setReady] = useState(false);
@@ -70,10 +70,10 @@ function useYT() {
           width: "100%",
           height: "100%",
           playerVars: {
-            controls: 0,
+            controls: nativeControls ? 1 : 0,
             rel: 0,
             modestbranding: 1,
-            disablekb: 1,
+            disablekb: nativeControls ? 0 : 1,
             playsinline: 1,
             fs: 0,
             iv_load_policy: 3,
@@ -102,7 +102,7 @@ function useYT() {
         });
       });
     },
-    [cueInternal]
+    [cueInternal, nativeControls]
   );
 
   const cue = useCallback(
@@ -782,7 +782,7 @@ function CoachMode({
   persistClips: (c: Clip[]) => void;
   flash: (m: string) => void;
 }) {
-  const yt = useYT();
+  const yt = useYT(true); // coach gets YouTube's native scrubber + controls
   const [step, setStep] = useState<Step>(clips.length ? "list" : "load");
   const [urlInput, setUrlInput] = useState("");
   const [videoId, setVideoId] = useState<string | null>(null);
@@ -802,12 +802,13 @@ function CoachMode({
     if (scrubTimer.current) clearInterval(scrubTimer.current);
   }, []);
 
-  // While the coach previews playback, keep the scrubber tracking the video.
+  // Track the video's current time so the mark buttons/readout stay live,
+  // however the coach navigated (native bar, skip buttons, playback).
   useEffect(() => {
-    if (step !== "marks" || !yt.isPlaying) return;
-    const id = setInterval(() => setScrub(yt.time()), 200);
+    if (step !== "marks") return;
+    const id = setInterval(() => setScrub(yt.time()), 250);
     return () => clearInterval(id);
-  }, [step, yt.isPlaying, yt.time]);
+  }, [step, yt.time]);
 
   const resetBuilder = () => {
     setUrlInput("");
@@ -835,11 +836,6 @@ function CoachMode({
     setStep("marks");
     // keep our scrub state synced to the player while on this step
     if (scrubTimer.current) clearInterval(scrubTimer.current);
-  };
-
-  const onScrub = (v: number) => {
-    setScrub(v);
-    yt.seek(v, true);
   };
 
   const placeTarget = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1004,30 +1000,18 @@ function CoachMode({
           <div className="yt-host" ref={yt.hostRef} />
           <div
             className={"overlay" + (placing ? " placing" : "")}
-            onClick={(e) => {
-              if (placing) placeTarget(e);
-              else yt.toggle();
-            }}
+            style={{ pointerEvents: placing ? "auto" : "none" }}
+            onClick={placing ? placeTarget : undefined}
           >
-            {!placing && !yt.isPlaying && (
-              <span
-                className="tap-icon"
-                style={{
-                  position: "absolute",
-                  left: "50%",
-                  top: "50%",
-                  transform: "translate(-50%, -50%)",
-                  pointerEvents: "none",
-                }}
-              >
-                ▶
-              </span>
-            )}
             {targets.map((t) => (
               <button
                 key={t.id}
                 className={"target" + (correctId === t.id ? " correct" : "")}
-                style={{ left: `${t.x * 100}%`, top: `${t.y * 100}%` }}
+                style={{
+                  left: `${t.x * 100}%`,
+                  top: `${t.y * 100}%`,
+                  pointerEvents: "auto",
+                }}
                 onClick={(e) => {
                   e.stopPropagation();
                   if (placing) return;
@@ -1042,44 +1026,52 @@ function CoachMode({
         </div>
 
         <div className="card" style={{ marginTop: 12 }}>
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: 10,
-              marginBottom: 8,
-            }}
-          >
+          <div className="label" style={{ marginBottom: 8 }}>
+            Now at <span className="tabnum">{fmtTime(scrub)}</span>
+            {yt.duration ? (
+              <span className="tabnum"> / {fmtTime(yt.duration)}</span>
+            ) : null}
+            <span style={{ color: "var(--text-faint)", fontWeight: 600 }}>
+              {" "}
+              · use the video’s own play bar to scrub
+            </span>
+          </div>
+
+          <div className="chiprow">
             <button
               className="chip"
-              disabled={!yt.ready}
-              onClick={() => yt.toggle()}
+              onClick={() => yt.seek(startTime)}
+              title="Jump to the Start you marked"
             >
-              {yt.isPlaying ? "⏸ Pause" : "▶ Play"}
+              ◀ Rep start
             </button>
-            <div className="label" style={{ margin: 0 }}>
-              <span className="tabnum">{fmtTime(scrub)}</span>
-              {yt.duration ? (
-                <span className="tabnum"> / {fmtTime(yt.duration)}</span>
-              ) : null}
-            </div>
+            <button
+              className="chip"
+              onClick={() => yt.seek(Math.max(0, yt.time() - 10))}
+            >
+              ⏪ 10s
+            </button>
+            <button
+              className="chip"
+              onClick={() => yt.seek(Math.max(0, yt.time() - 5))}
+            >
+              ⏪ 5s
+            </button>
+            <button className="chip" onClick={() => yt.seek(yt.time() + 5)}>
+              5s ⏩
+            </button>
+            <button className="chip" onClick={() => yt.seek(yt.time() + 10)}>
+              10s ⏩
+            </button>
           </div>
-          <input
-            className="range"
-            type="range"
-            min={0}
-            max={Math.max(1, Math.floor(yt.duration || 1))}
-            step={0.5}
-            value={scrub}
-            onFocus={() => yt.refreshDuration()}
-            onChange={(e) => onScrub(parseFloat(e.target.value))}
-          />
+
           <div className="chiprow" style={{ marginTop: 10 }}>
             <button
               className="chip"
               onClick={() => {
-                setStartTime(scrub);
-                flash(`Start @ ${fmtTime(scrub)}`);
+                const t = yt.time();
+                setStartTime(t);
+                flash(`Start @ ${fmtTime(t)}`);
               }}
             >
               ⏮ Start = {fmtTime(startTime)}
@@ -1087,8 +1079,9 @@ function CoachMode({
             <button
               className="chip"
               onClick={() => {
-                setPauseTime(scrub);
-                flash(`Decision @ ${fmtTime(scrub)}`);
+                const t = yt.time();
+                setPauseTime(t);
+                flash(`Decision @ ${fmtTime(t)}`);
               }}
             >
               ⏸ Decision = {fmtTime(pauseTime)}
@@ -1096,17 +1089,20 @@ function CoachMode({
             <button
               className="chip"
               onClick={() => {
-                setResumeEnd(scrub);
-                flash(`Resolve @ ${fmtTime(scrub)}`);
+                const t = yt.time();
+                setResumeEnd(t);
+                flash(`Resolve @ ${fmtTime(t)}`);
               }}
             >
               ⏭ Resolve = {fmtTime(resumeEnd)}
             </button>
           </div>
+
           <div className="help">
-            <b>Tap the video</b> to play / pause (or drag the slider). At the
-            right spot, tap <b>Start</b> (rep begins), <b>Decision</b> (player
-            must choose), and <b>Resolve</b> (just after it plays out).
+            Scrub with the video’s own play bar, or nudge with the skip buttons.
+            At the right spot tap <b>Start</b> (rep begins), <b>Decision</b>{" "}
+            (player must choose), and <b>Resolve</b> (just after it plays out).
+            <b> ◀ Rep start</b> jumps back to your Start anytime.
           </div>
         </div>
 
