@@ -23,61 +23,84 @@ import {
 type Role = "athlete" | "coach";
 
 /* ----------------------------------------------------------------
-   YouTube player hook — owns one iframe player inside `hostId`.
+   YouTube player hook — creates the player when its host node mounts
+   (via callback ref), and queues a cue until the player is ready.
 ------------------------------------------------------------------ */
-function useYT(hostId: string) {
+function useYT() {
   const playerRef = useRef<any>(null);
+  const pending = useRef<{ videoId: string; start: number } | null>(null);
   const [ready, setReady] = useState(false);
   const [duration, setDuration] = useState(0);
 
-  useEffect(() => {
-    let destroyed = false;
-    loadYouTubeAPI().then(() => {
-      if (destroyed) return;
-      const YT = (window as any).YT;
-      playerRef.current = new YT.Player(hostId, {
-        width: "100%",
-        height: "100%",
-        playerVars: {
-          controls: 0,
-          rel: 0,
-          modestbranding: 1,
-          disablekb: 1,
-          playsinline: 1,
-          fs: 0,
-          iv_load_policy: 3,
-        },
-        events: {
-          onReady: () => {
-            if (destroyed) return;
-            setReady(true);
-            try {
-              setDuration(playerRef.current.getDuration() || 0);
-            } catch {}
-          },
-        },
-      });
-    });
-    return () => {
-      destroyed = true;
-      try {
-        playerRef.current?.destroy?.();
-      } catch {}
-      playerRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hostId]);
-
-  const cue = useCallback((videoId: string, start = 0) => {
+  const cueInternal = useCallback((videoId: string, start = 0) => {
     try {
       playerRef.current?.cueVideoById({ videoId, startSeconds: start });
       setTimeout(() => {
         try {
           setDuration(playerRef.current?.getDuration?.() || 0);
         } catch {}
-      }, 600);
+      }, 700);
     } catch {}
   }, []);
+
+  // Callback ref: fires with the wrapper node on mount, null on unmount.
+  const hostRef = useCallback(
+    (wrapper: HTMLDivElement | null) => {
+      if (!wrapper) {
+        try {
+          playerRef.current?.destroy?.();
+        } catch {}
+        playerRef.current = null;
+        setReady(false);
+        setDuration(0);
+        return;
+      }
+      if (playerRef.current) return;
+      // YT replaces the target node with an iframe — use a child so our
+      // React-managed wrapper stays intact.
+      const target = document.createElement("div");
+      wrapper.appendChild(target);
+      loadYouTubeAPI().then(() => {
+        const YT = (window as any).YT;
+        if (!YT?.Player) return;
+        playerRef.current = new YT.Player(target, {
+          width: "100%",
+          height: "100%",
+          playerVars: {
+            controls: 0,
+            rel: 0,
+            modestbranding: 1,
+            disablekb: 1,
+            playsinline: 1,
+            fs: 0,
+            iv_load_policy: 3,
+          },
+          events: {
+            onReady: () => {
+              setReady(true);
+              try {
+                setDuration(playerRef.current.getDuration() || 0);
+              } catch {}
+              if (pending.current) {
+                const p = pending.current;
+                pending.current = null;
+                cueInternal(p.videoId, p.start);
+              }
+            },
+          },
+        });
+      });
+    },
+    [cueInternal]
+  );
+
+  const cue = useCallback(
+    (videoId: string, start = 0) => {
+      if (playerRef.current && ready) cueInternal(videoId, start);
+      else pending.current = { videoId, start };
+    },
+    [ready, cueInternal]
+  );
 
   const play = useCallback(() => {
     try {
@@ -111,7 +134,7 @@ function useYT(hostId: string) {
     }
   }, []);
 
-  return { ready, duration, cue, play, pause, seek, time, refreshDuration };
+  return { ready, duration, hostRef, cue, play, pause, seek, time, refreshDuration };
 }
 
 /* ----------------------------------------------------------------
@@ -218,7 +241,7 @@ function AthleteMode({
   onScore: (s: ScoreEntry[]) => void;
   flash: (m: string) => void;
 }) {
-  const yt = useYT("yt-athlete");
+  const yt = useYT();
   const [tab, setTab] = useState<"play" | "board">("play");
   const [idx, setIdx] = useState(0);
   const [phase, setPhase] = useState<Phase>("menu");
@@ -365,9 +388,7 @@ function AthleteMode({
       ) : (
         <>
           <div className="stage">
-            <div className="yt-host">
-              <div id="yt-athlete" />
-            </div>
+            <div className="yt-host" ref={yt.hostRef} />
 
             {/* HUD */}
             {phase !== "menu" && (
@@ -629,7 +650,7 @@ function CoachMode({
   persistClips: (c: Clip[]) => void;
   flash: (m: string) => void;
 }) {
-  const yt = useYT("yt-coach");
+  const yt = useYT();
   const [step, setStep] = useState<Step>(clips.length ? "list" : "load");
   const [urlInput, setUrlInput] = useState("");
   const [videoId, setVideoId] = useState<string | null>(null);
@@ -826,9 +847,7 @@ function CoachMode({
         <div className="h1">Mark the decision</div>
 
         <div className="stage" style={{ marginTop: 8 }}>
-          <div className="yt-host">
-            <div id="yt-coach" />
-          </div>
+          <div className="yt-host" ref={yt.hostRef} />
           <div
             className={"overlay" + (placing ? " placing" : "")}
             onClick={placeTarget}
