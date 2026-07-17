@@ -104,6 +104,9 @@ function useYT() {
 
   const play = useCallback(() => {
     try {
+      // Muted playback is always allowed by autoplay policy — programmatic
+      // play with sound gets blocked and the clip never advances.
+      playerRef.current?.mute?.();
       playerRef.current?.playVideo?.();
     } catch {}
   }, []);
