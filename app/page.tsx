@@ -255,12 +255,47 @@ function AthleteMode({
   const [streak, setStreak] = useState(0);
   const decisionStart = useRef(0);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const watchTo = useRef<{ target: number; onArrive: () => void } | null>(null);
+  const [paused, setPaused] = useState(false);
 
   const clip = clips[idx];
 
   const stopTick = () => {
     if (tickRef.current) clearInterval(tickRef.current);
     tickRef.current = null;
+  };
+
+  const runTick = () => {
+    stopTick();
+    tickRef.current = setInterval(() => {
+      const w = watchTo.current;
+      if (!w) return;
+      if (yt.time() >= w.target) {
+        watchTo.current = null;
+        stopTick();
+        w.onArrive();
+      }
+    }, 80);
+  };
+
+  // Play toward a timestamp, then fire onArrive. No seek-on-arrive → smooth.
+  const beginWatch = (target: number, onArrive: () => void) => {
+    watchTo.current = { target, onArrive };
+    setPaused(false);
+    yt.play();
+    runTick();
+  };
+
+  const togglePlay = () => {
+    if (paused) {
+      setPaused(false);
+      yt.play();
+      runTick();
+    } else {
+      setPaused(true);
+      yt.pause();
+      stopTick();
+    }
   };
 
   useEffect(() => () => stopTick(), []);
@@ -270,27 +305,32 @@ function AthleteMode({
     setPhase("menu");
     setPicked(null);
     setGained(0);
+    setPaused(false);
+    watchTo.current = null;
     stopTick();
   }, [idx]);
+
+  const arriveDecision = () => {
+    yt.pause();
+    decisionStart.current = Date.now();
+    setPhase("decision");
+  };
 
   const startClip = () => {
     if (!clip || !yt.ready) return;
     setPicked(null);
     setGained(0);
     yt.seek(clip.startTime, true);
-    yt.play();
     setPhase("playing");
-    stopTick();
-    tickRef.current = setInterval(() => {
-      const t = yt.time();
-      if (t >= clip.pauseTime) {
-        yt.pause();
-        yt.seek(clip.pauseTime, true);
-        decisionStart.current = Date.now();
-        setPhase("decision");
-        stopTick();
-      }
-    }, 150);
+    beginWatch(clip.pauseTime, arriveDecision);
+  };
+
+  // Re-watch the lead-up without losing your pick.
+  const replayLeadup = () => {
+    if (!clip) return;
+    yt.seek(clip.startTime, true);
+    setPhase("playing");
+    beginWatch(clip.pauseTime, arriveDecision);
   };
 
   const lockIn = () => {
@@ -302,20 +342,26 @@ function AthleteMode({
     setSessionPoints((p) => p + pts);
     setSessionDone((d) => d + 1);
     setStreak((s) => (correct ? s + 1 : 0));
-    // resume to let the play resolve
-    yt.seek(clip.pauseTime, true);
-    yt.play();
     setPhase("resolving");
-    stopTick();
-    tickRef.current = setInterval(() => {
-      const t = yt.time();
-      if (t >= clip.resumeEnd) {
+    // Play on from the decision frame (no seek) to let the play resolve.
+    if (clip.resumeEnd > clip.pauseTime + 0.1) {
+      beginWatch(clip.resumeEnd, () => {
         yt.pause();
         setPhase("reveal");
-        stopTick();
         commitScore(pts);
-      }
-    }, 150);
+      });
+    } else {
+      yt.pause();
+      setPhase("reveal");
+      commitScore(pts);
+    }
+  };
+
+  // Replay the whole rep with the answer shown.
+  const watchAgain = () => {
+    if (!clip) return;
+    yt.seek(clip.startTime, true);
+    beginWatch(clip.resumeEnd, () => yt.pause());
   };
 
   const commitScore = (pts: number) => {
@@ -445,11 +491,28 @@ function AthleteMode({
                 </div>
               )}
 
+            {/* Tap the video to pause / resume */}
+            {(phase === "playing" || phase === "resolving") && (
+              <button
+                className="tap-layer"
+                onClick={togglePlay}
+                aria-label="Play or pause"
+              >
+                {paused && <span className="tap-icon">▶</span>}
+              </button>
+            )}
+
             {/* Prompt bar */}
             {phase === "decision" && clip && (
               <div className="stage-prompt">
                 {clip.prompt || "What happens next?"}
                 <small>Tap your read, then lock it in</small>
+              </div>
+            )}
+            {phase === "playing" && (
+              <div className="stage-prompt">
+                {paused ? "Paused — tap to resume" : "Watch the rep…"}
+                <small>It freezes at the decision</small>
               </div>
             )}
             {phase === "resolving" && (
@@ -481,24 +544,29 @@ function AthleteMode({
             )}
 
             {phase === "playing" && (
-              <button className="btn ghost" disabled>
-                Watch…
+              <button className="btn ghost" onClick={togglePlay}>
+                {paused ? "▶  Resume" : "⏸  Pause"}
               </button>
             )}
 
             {phase === "decision" && (
-              <button
-                className="btn primary"
-                disabled={!picked}
-                onClick={lockIn}
-              >
-                🔒 Lock in my read
-              </button>
+              <div className="stack">
+                <button
+                  className="btn primary"
+                  disabled={!picked}
+                  onClick={lockIn}
+                >
+                  🔒 Lock in my read
+                </button>
+                <button className="btn ghost" onClick={replayLeadup}>
+                  ↻ Replay the lead-up
+                </button>
+              </div>
             )}
 
             {phase === "resolving" && (
-              <button className="btn ghost" disabled>
-                Resolving…
+              <button className="btn ghost" onClick={togglePlay}>
+                {paused ? "▶  Resume" : "⏸  Pause"}
               </button>
             )}
 
@@ -530,15 +598,16 @@ function AthleteMode({
                     <b>Why:</b> {clip.why || "The correct read is highlighted above."}
                   </div>
                 </div>
-                <button
-                  className="btn primary"
-                  style={{ marginTop: 16 }}
-                  onClick={nextClip}
-                >
-                  {idx + 1 < clips.length
-                    ? "Next rep  →"
-                    : "Finish session  →"}
-                </button>
+                <div className="stack" style={{ marginTop: 16 }}>
+                  <button className="btn primary" onClick={nextClip}>
+                    {idx + 1 < clips.length
+                      ? "Next rep  →"
+                      : "Finish session  →"}
+                  </button>
+                  <button className="btn ghost" onClick={watchAgain}>
+                    ↻ Watch it again
+                  </button>
+                </div>
               </div>
             )}
           </div>
