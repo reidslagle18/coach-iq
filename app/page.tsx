@@ -31,9 +31,12 @@ function useYT() {
   const pending = useRef<{ videoId: string; start: number } | null>(null);
   const [ready, setReady] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [error, setError] = useState<number | null>(null);
 
   const cueInternal = useCallback((videoId: string, start = 0) => {
     try {
+      setError(null);
       playerRef.current?.cueVideoById({ videoId, startSeconds: start });
       setTimeout(() => {
         try {
@@ -87,6 +90,14 @@ function useYT() {
                 cueInternal(p.videoId, p.start);
               }
             },
+            onStateChange: (e: any) => {
+              setIsPlaying(e.data === 1); // 1 = PLAYING
+              if (e.data === 1) setError(null);
+            },
+            onError: (e: any) => {
+              // 101 & 150 = embedding disabled by owner; 100 = removed/private; 2 = bad id
+              setError(e?.data ?? -1);
+            },
           },
         });
       });
@@ -137,7 +148,31 @@ function useYT() {
     }
   }, []);
 
-  return { ready, duration, hostRef, cue, play, pause, seek, time, refreshDuration };
+  return {
+    ready,
+    duration,
+    isPlaying,
+    error,
+    hostRef,
+    cue,
+    play,
+    pause,
+    seek,
+    time,
+    refreshDuration,
+  };
+}
+
+// Human-readable reason for a YouTube player error code.
+function ytErrorMessage(code: number | null): string | null {
+  if (code == null) return null;
+  if (code === 101 || code === 150)
+    return "This video's owner disabled playing it on other sites. Pick a different clip — most highlight channels, breakdowns, and school/Hudl uploads work.";
+  if (code === 100)
+    return "That video is private or was removed. Try another link.";
+  if (code === 2) return "That doesn't look like a valid YouTube link.";
+  if (code === 5) return "This clip couldn't load in the player. Try another.";
+  return "This clip couldn't play. Try a different YouTube link.";
 }
 
 /* ----------------------------------------------------------------
@@ -520,6 +555,16 @@ function AthleteMode({
             )}
           </div>
 
+          {yt.error != null && (
+            <div
+              className="note"
+              style={{ borderLeftColor: "var(--bad)", marginTop: 12 }}
+            >
+              <b style={{ color: "var(--bad)" }}>This clip can’t play. </b>
+              {ytErrorMessage(yt.error)}
+            </div>
+          )}
+
           {/* Controls below stage */}
           <div style={{ marginTop: 14 }}>
             {phase === "menu" && (
@@ -742,6 +787,13 @@ function CoachMode({
     if (scrubTimer.current) clearInterval(scrubTimer.current);
   }, []);
 
+  // While the coach previews playback, keep the scrubber tracking the video.
+  useEffect(() => {
+    if (step !== "marks" || !yt.isPlaying) return;
+    const id = setInterval(() => setScrub(yt.time()), 200);
+    return () => clearInterval(id);
+  }, [step, yt.isPlaying, yt.time]);
+
   const resetBuilder = () => {
     setUrlInput("");
     setVideoId(null);
@@ -918,6 +970,21 @@ function CoachMode({
         <div className="eyebrow">Step 2 of 3</div>
         <div className="h1">Mark the decision</div>
 
+        {yt.error != null && (
+          <div
+            className="note"
+            style={{ borderLeftColor: "var(--bad)", marginTop: 10 }}
+          >
+            <b style={{ color: "var(--bad)" }}>Can’t play this clip. </b>
+            {ytErrorMessage(yt.error)}
+            <div style={{ marginTop: 8 }}>
+              <button className="chip" onClick={() => setStep("load")}>
+                ← Try another link
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="stage" style={{ marginTop: 8 }}>
           <div className="yt-host" ref={yt.hostRef} />
           <div
@@ -943,11 +1010,27 @@ function CoachMode({
         </div>
 
         <div className="card" style={{ marginTop: 12 }}>
-          <div className="label">
-            Scrub the film — <span className="tabnum">{fmtTime(scrub)}</span>
-            {yt.duration ? (
-              <span className="tabnum"> / {fmtTime(yt.duration)}</span>
-            ) : null}
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+              marginBottom: 8,
+            }}
+          >
+            <button
+              className="chip"
+              disabled={!yt.ready}
+              onClick={() => (yt.isPlaying ? yt.pause() : yt.play())}
+            >
+              {yt.isPlaying ? "⏸ Pause" : "▶ Play"}
+            </button>
+            <div className="label" style={{ margin: 0 }}>
+              <span className="tabnum">{fmtTime(scrub)}</span>
+              {yt.duration ? (
+                <span className="tabnum"> / {fmtTime(yt.duration)}</span>
+              ) : null}
+            </div>
           </div>
           <input
             className="range"
@@ -989,9 +1072,9 @@ function CoachMode({
             </button>
           </div>
           <div className="help">
-            Scrub to where the rep begins → tap <b>Start</b>. Scrub to the moment
-            the player must decide → tap <b>Decision</b>. Scrub to just after the
-            play resolves → tap <b>Resolve</b>.
+            Press <b>▶ Play</b> to watch (or drag the slider). At the right spot,
+            tap <b>Start</b> (rep begins), <b>Decision</b> (player must choose),
+            and <b>Resolve</b> (just after it plays out).
           </div>
         </div>
 
